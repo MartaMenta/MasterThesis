@@ -1,0 +1,946 @@
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+library(factoextra)
+library(tidyr)
+library(naniar)
+library(VIM)
+library(purrr)
+library(org.Cf.eg.db)
+library(clusterProfiler)
+
+library(stats)
+library(perm)
+library(coin)
+
+library(pheatmap)
+
+############################# 1. Exploratory Data Analysis (EDA)
+
+############## 1.1. Loading in the DATA files of the MS output 
+#### 1.1.1. PD output/PD_NO_nested/ 
+# where PD output is the Proteome Discoverer output, non-nested analysis results describe conditions & factors that are not hierarchically structured
+proteins <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/PD_NO_nested/P79_R0796_TMTpro_MS3 Results-(1)_Proteins.txt", 
+                       sep = "\t", header = TRUE, check.names = FALSE) 
+# check.names = FALSE to not modify the column names & preserve special characters
+
+#### 1.1.2. PD output/bioinformatics/no_nested/no_S4_S12/data/
+# datatables with MinProb and Mixed imputations 
+original <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/data/original.tsv", sep = "\t", header = TRUE, row.names = 1)
+processed_minprob <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/data/processed_minprob.tsv", sep = "\t", header = TRUE, row.names = 1)
+processed_mixed <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/data/processed_mixed.tsv", sep = "\t", header = TRUE, row.names = 1)
+
+# checking their dimensions
+dim(original) # 59818 x 7 for all | and 49854 x 7 for no_S4_S12
+dim(processed_minprob) # 12 x 4990 | and 10 x 4990 for no_S4_S12
+dim(processed_mixed) # 12 x 4990 | and 10 x 4990 for no_S4_S12
+
+############## 1.2. Loading in the STATISTICS files of the MS output 
+#### 1.2.1. PD output/bioinformatics/no_nested/no_S4_S12/statistics/
+# /MINPROB/
+minprob_fdr0.01_BH <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/Significant_proteins_BH_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+minprob_fdr0.01_permutation <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/Significant_proteins_permutation_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+minprob_fdr0.05_BH <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/Significant_proteins_BH_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+minprob_fdr0.05_permutation <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/Significant_proteins_permutation_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+
+# /MIXED/
+mixed_fdr0.01_BH <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/Significant_proteins_BH_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+mixed_fdr0.01_permutation <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/Significant_proteins_permutation_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+mixed_fdr0.05_BH <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/Significant_proteins_BH_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+mixed_fdr0.05_permutation <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/Significant_proteins_permutation_correction.tsv", sep = "\t", header = TRUE, row.names = 1)
+
+#### 1.2.2. Comparing & contrasting the lists of significant proteins arrived at via BH and Permutation corrections using the Mixed vs MinProb imputation method at FDR_0.01 vs 0.05
+# all the BHs are empty, so disregard them and only use Permutation ones:
+# MINPROB
+minprob_fdr0.01_UP <- as.character(minprob_fdr0.01_permutation$DCM.Control.up) %>% subset(., . != "") # 41 for no_S4_S12
+minprob_fdr0.01_DOWN <- as.character(minprob_fdr0.01_permutation$DCM.Control.down) %>% subset(., . != "") # 20 for no_S4_S12
+minprob_fdr0.05_UP <- minprob_fdr0.05_permutation$DCM.Control.up %>% subset(., . != "") # 164 for no_S4_S12
+minprob_fdr0.05_DOWN <- minprob_fdr0.05_permutation$DCM.Control.down %>% subset(., . != "") # 169 for no_S4_S12
+
+# MIXED
+mixed_fdr0.01_UP <- mixed_fdr0.01_permutation$DCM.Control.up %>% subset(., . != "") # 41 for no_S4_S12
+mixed_fdr0.01_DOWN <- mixed_fdr0.01_permutation$DCM.Control.down %>% subset(., . != "") # 20 for no_S4_S12
+mixed_fdr0.05_UP <- mixed_fdr0.05_permutation$DCM.Control.up %>% subset(., . != "") # 164 for no_S4_S12
+mixed_fdr0.05_DOWN <- mixed_fdr0.05_permutation$DCM.Control.down %>% subset(., . != "") # 169 for no_S4_S12
+
+# common proteins 
+cproteins_fdr0.01_UP <- intersect(minprob_fdr0.01_UP, mixed_fdr0.01_UP)
+length(cproteins_fdr0.01_UP) # 54 for all | 41 for no_S4_S12
+cproteins_fdr0.05_UP <- intersect(minprob_fdr0.05_UP, mixed_fdr0.05_UP)
+length(cproteins_fdr0.05_UP) # 181 for all | 163 for no_S4_S12
+  # the missing 1 of the 164: 
+  # "None~A0A8P0TPI9" in minprob_fdr0.05_UP but not the other
+  # "MYOM3~A0A8P0SHV1" in mixed_fdr0.05_UP but not the other
+
+cproteins_fdr0.01_DOWN <- intersect(minprob_fdr0.01_DOWN, mixed_fdr0.01_DOWN)
+length(cproteins_fdr0.01_DOWN) # 13 for all | 20 for no_S4_S12
+cproteins_fdr0.05_DOWN <- intersect(minprob_fdr0.05_DOWN, mixed_fdr0.05_DOWN)
+length(cproteins_fdr0.05_DOWN) # 101 for all | 169 for no_S4_S12
+
+# unique proteins
+uproteins_mixed_fdr_0.05_DOWN <- setdiff(mixed_fdr0.05_DOWN, minprob_fdr0.05_DOWN)
+uproteins_mixed_fdr_0.05_DOWN # LAMB2~A0A8P0PQE8 for all | none for no_S4_S12
+uproteins_mixed_fdr_0.01_DOWN <- setdiff(mixed_fdr0.01_DOWN, minprob_fdr0.01_DOWN)
+uproteins_mixed_fdr_0.01_DOWN # PCSK1N~A0A8P0SJS8 for all | none for no_S4_S12
+uproteins_minprob_fdr_0.05_UP <- setdiff(minprob_fdr0.05_UP, mixed_fdr0.05_UP) # "None~A0A8P0TPI9"
+uproteins_mixed_fdr_0.05_UP <- setdiff(mixed_fdr0.05_UP, minprob_fdr0.05_UP) #"MYOM3~A0A8P0SHV1"
+
+## CONCLUSION: most relevant for my analysis = mixed_fdr0.01_permutation
+
+#### 1.2.3. Comparison of significant proteins with results of other papers
+# symbols of mixed_fdr0.01_UP and mixed_fdr0.01_DOWN lists
+sigprots_UP <- sub("~.*", "", mixed_fdr0.01_UP) %>% .[!grepl("None", .)]
+sigprots_DOWN <- sub("~.*", "", mixed_fdr0.01_DOWN) %>% .[!grepl("None", .)]
+
+sigprots_UP_5 <- sub("~.*", "", mixed_fdr0.05_UP) %>% .[!grepl("None", .)]
+sigprots_DOWN_5 <- sub("~.*", "", mixed_fdr0.05_DOWN) %>% .[!grepl("None", .)]
+
+# print list for STRING analysis online
+# cat(sigprots_UP_5, sep = ", ")
+
+### Lu et al., 2019
+Lu2019_DCM_UP <- c("F8WID5", "HBB1", "SPA3K", "NDUS8", "H2B1M", "Q9CZ19", "MYH3", "H2A1K", "MYL6", "DMD", "NACAM", "RS7", 
+                   "CALM3", "MLRA", "NDUB6", "COX5B", "ACBP", "ROA2", "A2A838", "SERPH", "TMOD3", "H10", "FIBA", "DZ4", "CALU",
+                   "ICAL", "A2BE93", "NDUB4", "NUCL", "ATP5I", "GDIR1", "RL13", "RS24", "RUXG", "H31", "K1C19", "RS15", "RS9",
+                   "CISD1", "ANF", "ACYP2", "GSTM2", "STML2", "MECP2", "NEDD8", "Q8C845", "TFAM", "BMP10", "E9Q9C4", "DJB11",
+                   "K2C7", "HPT", "G5E850", "RS17", "CYB5B", "NDUA7", "YBOX1", "A2AUD5", "GR19", "LAP2B", "LAP2B", "B1AXW6",
+                   "DYST", "A2AJI1", "RL21", "H15", "RL14", "K1C18", "PPP5", "SGCD", "RRAS", "MYDGF", "RL18", "RUXG", "PSMD7",
+                   "SRSF1", "RL24", "SNP23", "H2AW", "VAMP2", "F7B5B5", "TRA2B", "PAIP2", "G3UWC2", "FKBP8", "A0A1L1S", "RL6",
+                   "PFD2", "Q9CXU4") # 89
+# K1C19 is KRT19, K2C7 is KRT7
+Lu2019_DCM_DOWN <-c("MLRV", "VDAC3", "ACTB", "ECHA", "PRDX3", "ACON", "TNNC1", "B1AR69", "IDHP", "NDUS2", "S10A1", "PYGB", 
+                    "G6PI", "G6PI", "NDUS1", "BDH", "RYR2", "Q99N15", "ABEC2", "EF1A2", "MMSA", "CACP", "CPT1B", "Q7TMG8",
+                    "AL4A1", "MCCA", "A0A1W2", "ECI1", "E9PZF0", "THTM", "NDUS7", "LDHA", "1433G", "F8VPN4", "UBQL2", "PGES2",
+                    "SDHB", "NDUS5", "GSTK1", "D39U1", "DDX3X", "AUHM", "FADD", "Q8C253", "XDH", "FABP5", "CBPA3", "FABP5",
+                    "CBPA3", "NDUB9", "SUOX", "HINT2", "PRS7", "MCAT", "A0A087", "FBRL", "TPPP", "ABHDB") # 58
+
+cUPproteins_withLu2019 <- intersect(sigprots_UP, Lu2019_DCM_UP) # length(cUPproteins_withLu2019)
+cDOWNproteins_withLu2019 <- intersect(sigprots_DOWN, Lu2019_DCM_DOWN) # length(cDOWNproteins_withLu2019)
+
+############## 1.3. Assessing data quality
+#### 1.3.1. Data completeness (average per sample per group)
+# Calculating the proportion of non-missing values for LFQ intensity in each group for assessing data completeness
+completeness_data <- aggregate(!is.na(LFQ.intensity) ~ sample + group, data = original, FUN = mean)
+completeness_data$Completeness <- completeness_data$`!is.na(LFQ.intensity)` * 100
+
+# Creating a bar plot for data completeness per sample
+p <- ggplot(completeness_data, aes(x = sample, y = Completeness, fill = group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Data completeness per Sample",
+       x = "Analytical Sample",
+       y = "Data Completeness (%)") +
+  theme_minimal() +
+  scale_fill_manual(values = c(Control = "cornflowerblue", DCM = "tomato1")) +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+p + geom_text(aes(label = sprintf("%d%%", Completeness)), vjust = -0.5, position = position_dodge(width = 0.9))
+
+# Creating a bar plot for data completeness per group
+p <- ggplot(completeness_data, aes(x = group, y = Completeness, fill = group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Data completeness per Group",
+       x = "Group",
+       y = "Data Completeness (%)") +
+  theme_minimal() +
+  scale_fill_manual(values = c(Control = "cornflowerblue", DCM = "tomato1")) +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+p + geom_text(aes(label = sprintf("%d%%", Completeness)), vjust = -0.5, position = position_dodge(width = 0.9)) # adding the actual values
+
+#### 1.3.2. Number of proteins
+# Calculating the number of proteins per sample
+protein_count_data <- aggregate(identifier ~ sample + group, data = original, FUN = function(x) length(unique(x))) # custom function to count the number of unique proteins for each combination of sample and group
+protein_count_data
+
+# Creating a bar plot for number of proteins per sample
+p <- ggplot(protein_count_data, aes(x = sample, y = identifier, fill = group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Number of Proteins per Sample",
+       x = "Analytical Sample",
+       y = "Number of Proteins") +
+  theme_minimal() +
+  scale_fill_manual(values = c(Control = "cornflowerblue", DCM = "tomato1")) +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+p + geom_text(aes(label = identifier), vjust = -0.5, position = position_dodge(width = 0.9)) # adding the actual protein count values on top of each bar
+
+#### 1.3.3. Data distribution
+# Creating a box plot for LFQ intensity distribution per sample
+ggplot(original, aes(x = sample, y = LFQ.intensity, fill = group)) +
+  # stat_boxplot(geom ='errorbar', aes(color = group), width= 0.3) +
+  geom_boxplot(aes(color = group),  alpha = 0.5) +
+  labs(title = "Distribution of LFQ Intensity per Sample",
+       x = "Sample",
+       y = "LFQ Intensity") +
+  theme_minimal() +
+  scale_fill_manual(values = c(Control = "cornflowerblue", DCM = "tomato1")) +
+  scale_color_manual(values = c(Control = "cornflowerblue", DCM = "tomato1")) +
+  facet_wrap(~ group, scales = "free_x") +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+# Creating a historgram of LFQ intensity versus frequency
+ggplot(original, aes(x = LFQ.intensity)) +
+  geom_histogram(binwidth = 0.2, fill = "cornflowerblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of protein abundance\n measured by LFQ intensity",
+       x = "LFQ Intensity",
+       y = "Frequency") +
+  theme_minimal() + 
+  scale_x_continuous(breaks = seq(0, 20, by = 5)) +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+## do it by samples??
+
+#### 1.3.4. Ranking
+# Ranking the data
+ranked_data_CTRL <- original %>%
+  arrange(desc(LFQ.intensity)) %>%          # Arrange in descending order of LFQ.intensity
+  filter(group == "Control") %>%            # Filter out rows where group is not "Control"
+  distinct(gene.name, .keep_all = TRUE) %>% # Only keep the first of each unique value in the "gene.name" column
+  mutate(Ranking = 1:n())                   # Creating a new column for ranking position
+
+ranked_data_DCM <- original %>%
+  arrange(desc(LFQ.intensity)) %>%          # Arrange in descending order of LFQ.intensity
+  filter(group == "DCM") %>%                # Filter out rows where group is not "DCM"
+  distinct(gene.name, .keep_all = TRUE) %>% # Only keep the first of each unique value in the "gene.name" column
+  mutate(Ranking = 1:n())                   # Creating a new column for ranking position
+
+# Labeling top and bottom genes for each group
+n = 10
+top_genes_CTRL <- head(ranked_data_CTRL$gene.name, n)
+bottom_genes_CTRL <- tail(ranked_data_CTRL$gene.name, n)
+top_genes_DCM <- head(ranked_data_DCM$gene.name, n)
+bottom_genes_DCM <- tail(ranked_data_DCM$gene.name, n)
+
+# Creating a ranking plot
+plot_DCM <- ggplot(ranked_data_DCM, aes(x = Ranking, y = LFQ.intensity)) +
+  geom_point(color = "tomato1", alpha = 0.4) +
+  labs(x = "Protein Ranking", y = "LFQ Intensity", subtitle = "group=DCM") +  
+  scale_x_continuous(limits = c(0, 5000), breaks = seq(0, 5000, by = 1000)) +  # Adjust x-axis limits and ticks
+  scale_y_continuous(limits = c(0, 21), breaks = seq(0, 21, by = 5)) +
+  theme_minimal() +
+  annotate("text", x = 0, y = 0, label = paste("Bottom 10 genes:\n", paste(bottom_genes_DCM, collapse = "\n")), vjust = 0, hjust = 0, color = "red") +
+  annotate("text", x = Inf, y = Inf, label = paste("Top 10 genes:\n", paste(top_genes_DCM, collapse = "\n")), vjust = 1, hjust = 1, color = "red")
+
+plot_CTRL <- ggplot(ranked_data_CTRL, aes(x = Ranking, y = LFQ.intensity)) +
+  geom_point(color = "cornflowerblue", alpha = 0.4) +
+  labs(x = "Protein Ranking", y = "LFQ Intensity", subtitle = "group=Control") +
+  scale_x_continuous(limits = c(0, 5000), breaks = seq(0, 5000, by = 1000)) +  # Adjust x-axis limits and ticks
+  scale_y_continuous(limits = c(0, 21), breaks = seq(0, 21, by = 5)) +
+  theme_minimal() +
+  annotate("text", x = 0, y = 0, label = paste("Bottom 10 genes:\n", paste(bottom_genes_CTRL, collapse = "\n")), vjust = 0, hjust = 0, color = "blue") +
+  annotate("text", x = Inf, y = Inf, label = paste("Top 10 genes:\n", paste(top_genes_CTRL, collapse = "\n")), vjust = 1, hjust = 1, color = "blue")
+
+# Arranging the two plots side by side with Control first
+combined_plot <- grid.arrange(plot_CTRL, plot_DCM, ncol = 2)
+
+#### 1.3.5. Coefficient of variation
+# 1. Calculating the coefficient of variation (CV) for each group (CTRL vs DCM)
+summary_data <- original %>%
+  group_by(group) %>%
+  summarize(mean_value = mean(LFQ.intensity),
+            median_value = median(LFQ.intensity),
+            cv_value = sd(LFQ.intensity) / mean(LFQ.intensity) * 100)
+
+# 2. Creating a side-by-side violin plot for each group
+p <- ggplot(original, aes(x = group, y = LFQ.intensity, fill = group)) +
+  geom_violin(trim = FALSE, scale = "width", alpha = 0.7) + 
+  geom_boxplot(width=0.1) +
+  stat_summary(fun.data = function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))})
+
+p + 
+  scale_fill_manual(values = c("Control" = "cornflowerblue", "DCM" = "tomato1")) +
+  labs(title = "Coefficient of Variation Violin Plot with Mean and Median",
+       x = "Group",
+       y = "Value") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+#### 1.3.6. Sample correlation
+# Creating a correlation matrix of processed_mixed
+columns_to_exclude <- c(2, 3)                           # 2nd and 3rd column not numeric
+mixed_matrix <- processed_mixed[, -columns_to_exclude]  # excluding the 2nd & 3rd column
+row.names(mixed_matrix) <- mixed_matrix$sample          # making the sample column an index column
+mixed_matrix$sample <- NULL                             # remove the original first column
+correlation_matrix <- cor(t(mixed_matrix))              # transposing the matrix and making it into a correlation matrix
+
+# Potting a correlogram of the correlation matrix
+corrplot(correlation_matrix, col = COL2('RdBu', 30), method = "color", order = 'hclust', tl.col = "black", is.corr = FALSE, addCoef.col = "black", cl.length = 5, addgrid.col = 'white')
+
+## TESTING the original dataset, with Samples 4 and 12 that were excluded due to outlier potential
+processed_mixed_ALL <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/all/data/processed_mixed.tsv", sep = "\t", header = TRUE, row.names = 1)
+mixed_matrix_ALL <- processed_mixed_ALL[, -columns_to_exclude]  # excluding the 2nd & 3rd column
+row.names(mixed_matrix_ALL) <- mixed_matrix_ALL$sample          # making the sample column an index column
+mixed_matrix_ALL$sample <- NULL                                 # remove the original first column
+correlation_matrix <- cor(t(mixed_matrix_ALL))                  # transposing the matrix and making it into a correlation matrix
+corrplot(correlation_matrix, col = COL2('RdBu', 30), method = "color", order = 'hclust', tl.col = "black", is.corr = FALSE, addCoef.col = "black", cl.length = 5, addgrid.col = 'white')
+
+#### 1.3.7. PCA
+# Saving numerical data first as PCA data
+processed_mixed_pca_data <- processed_mixed %>%
+  select(-subject, -group, -sample) %>%  # excluding the nonnumerical columns > later added as metadata
+  as.matrix()
+
+# Creating metadata table and merging it with the PCA data
+pca_design <- processed_mixed[, 1:2]
+
+# Applying PCA to reduce the dimensionality of PCA data
+pca_result <- prcomp(processed_mixed_pca_data, scale. = TRUE, center = TRUE)  # scaling data to have mean=0 and std.dev=1
+
+plot_data_pca <- 
+  as_tibble(pca_result$x) %>% 
+  bind_cols(pca_design)
+
+percent_variance_pca <- 
+  summary(pca_result)$importance["Proportion of Variance",] * 100             # save percent variance to be displayed on axes
+
+# ggplot(as_tibble(pca_result$x), aes(x=PC1, y=PC2)) + geom_point() + 
+#   xlab(label = paste("PC1 -", percent_variance_pca[1], "%")) +
+#   ylab(label = paste("PC2 -", percent_variance_pca[2], "%")) + 
+#   labs(title = "PCA plot of the first 2 Principal Components") +
+#   theme(plot.title = element_text(hjust = 0.5, vjust = 0.5), panel.background = element_rect(fill = "lightgray"))
+
+# Visualizing the 2 groups (CTRL & DCM) on PCs 1 and 2
+ggplot(
+  plot_data_pca, aes(x=PC1, y=PC2, color=group, label=sample)) + 
+  geom_point(size = 8) + 
+  geom_point(aes(x = PC1, y = PC2), color = "black", size = 8, shape = 1) +     # Adding points with black outline
+  geom_text(aes(label = sample), color = "black", size =3) +
+  scale_color_manual(values = c("Control" = "cornflowerblue", "DCM" = "tomato1")) + 
+  # scale_color_brewer(type = "qual", palette = "Set1") + 
+  xlab(label = paste("PC1 (", percent_variance_pca[1], "%)")) +
+  ylab(label = paste("PC2 (", percent_variance_pca[2], "%)")) + 
+  labs(title = "PC2 vs PC1 of the data processed with mixed imputation") +
+  theme(plot.title = element_text(hjust = 0.5), panel.background = element_rect(fill = "lightgray"))
+
+############## 1.4. Clustering
+#### 1.4.1. Performing Hierarchical Clustering on the samples 
+# Generating a dendogram using Euclidean distance and complete linkage
+# all samples
+mixed_matrix_ALL <- as.matrix(mixed_matrix_ALL)
+dist_matrix <- dist(mixed_matrix_ALL, method = "euclidean")
+hclust_result <- hclust(dist_matrix, method = "complete")
+plot(hclust_result, main = "Hierarchical Clustering Dendrogram\n of all samples", xlab = "Samples")
+
+# S4 and S12 excluded
+mixed_matrix <- as.matrix(mixed_matrix)
+dist_matrix <- dist(mixed_matrix, method = "euclidean")
+hclust_result <- hclust(dist_matrix, method = "complete")
+plot(hclust_result, main = "Hierarchical Clustering Dendrogram\n excluding samples S4 and S12", xlab = "Samples")
+
+#### 1.4.2. Performing K-means Clustering on the proteins
+# processing the data
+## reorganising PROCESSED data
+processed_minprob_T <- t(processed_minprob)
+processed_mixed_T <- t(processed_mixed)
+
+# moving the indexcolumn into the first column
+row_names <- rownames(processed_minprob_T)
+processed_minprob_T <- data.frame(IndexColumn = row_names, processed_minprob_T)
+rownames(processed_minprob_T) <- NULL
+
+row_names <- rownames(processed_mixed_T)
+processed_mixed_T <- data.frame(IndexColumn = row_names, processed_mixed_T)
+rownames(processed_mixed_T) <- NULL
+
+# deleting the first 3 rows
+processed_minprob_T <- processed_minprob_T[4:nrow(processed_minprob_T), ]
+processed_mixed_T <- processed_mixed_T[4:nrow(processed_mixed_T), ]
+
+processed_mixed_kmeans <- na.omit(as.data.frame(processed_mixed_T))             
+rownames(processed_mixed_kmeans) <- NULL
+processed_mixed_kmeans <- processed_mixed_kmeans[, -2]
+colnames(processed_mixed_kmeans)[1] <- "Proteins"
+processed_mixed_kmeans[, -1] <- sapply(processed_mixed_kmeans[, -1], as.numeric)  # converting character columns to numeric
+scaled_kmeans_data <- scale(processed_mixed_kmeans[, -1])                         # scaling the data
+
+# choosing the right number of clusters based on multiple methods
+# Elbow Method
+# fviz_nbclust(scaled_kmeans_data, kmeans, method = "wss", k.max = 10)
+
+# Silhoutte Method
+# fviz_nbclust(scaled_kmeans_data, kmeans, method = "silhouette", k.max = 10)
+
+# Gap Statistic
+# fviz_nbclust(scaled_kmeans_data, kmeans, method = "gap", k.max = 20)
+
+# set number of clusters (appropriate value chosen above)
+k <- 2 # 14
+
+# running k-means clustering
+kmeans_result <- kmeans(scaled_kmeans_data, centers = k)
+
+# rearranging data
+protein_names <- processed_mixed_kmeans$Proteins                                          # storing the protein names separately
+scaled_kmeans_data <- cbind(Proteins = protein_names, as.data.frame(scaled_kmeans_data))  # reattaching the protein names to the processed data
+scaled_kmeans_data <- cbind(scaled_kmeans_data, Clusters = kmeans_result$cluster)         # adding the cluster labels as a new row to the data frame
+
+# visualising the clusters
+fviz_cluster(kmeans_result, data = scaled_kmeans_data[, -1],
+             ellipse.type = "norm", 
+             geom = "point",
+             ggtheme = theme_bw()
+)
+
+CL1 <- filter(scaled_kmeans_data, Clusters == 1)$Proteins
+CL2 <- filter(scaled_kmeans_data, Clusters == 2)$Proteins
+length(CL1) # 2495 for k=2 | 350 for k=14
+length(CL2) # 2492 for k=2 | 481 for k=14
+# printing the list of cluster members for functional analysis - gprofiler
+cat(CL1, sep = " ")
+cat(CL2, sep = " ")
+
+##################### Averaging LFQ intensities
+# Calculate mean intensities for control and condition samples
+control_mean <- rowMeans(scaled_kmeans_data[, 2:6])  # Assuming columns 2-6 are controls
+condition_mean <- rowMeans(scaled_kmeans_data[, 7:11])  # Assuming columns 7-11 are conditions
+
+# Create a new dataframe with average intensities for each protein
+average_intensity <- data.frame(
+  Proteins = scaled_kmeans_data$Proteins,
+  Control_Mean = control_mean,
+  Condition_Mean = condition_mean,
+  Clusters = scaled_kmeans_data$Clusters
+)
+
+#### Visualise 
+# Create a scatterplot of the first two principal components
+ggplot(average_intensity, aes(x = control_mean, y = condition_mean, color = Clusters)) +
+  geom_point() +
+  labs(title = "K-Means Clustering")
+
+
+
+
+############################# 2. Differential Expression Analysis (DEA)
+############## 2.1. Data format transformation and Imputation
+####### 2.1.1 From long to wide format
+selected_columns <- c("sample", "group", "subject", "LFQ.intensity", "identifier")  # selecting relevant columns
+subset_data <- original[, selected_columns] %>%                                     # subsetting the data frame
+  mutate(identifier = gsub("~", ".", identifier))                                   # changing all the tilde signs to dots                             
+processed <- spread(subset_data, key = identifier, value= LFQ.intensity)            # reshaping the data from long to wide format
+
+####### 2.1.2. Assessing missing values
+empty_columns_count <- sum(colSums(is.na(processed) | processed == "") > 0)         # checking the number of empty columns
+empty_columns <- names(processed)[colSums(is.na(processed) | processed == "") > 0]  # saving the names of the empty columns
+print(paste("Number of empty columns:", empty_columns_count)) # 11                  # printing the count of empty columns
+cat("Columns with empty values: ", paste(empty_columns, collapse = ', '), "\n")     # printing the names of empty columns
+# AADAT.A0A8I3Q0F5, CDH19.A0A8I3MEQ3, COL2A1.O77753, DDAH2.A0A8P0S6X2, HACD2.A0A8I3PIH1, LAMB2.A0A8P0PQE8, MYOM3.A0A8P0SHV1, None.A0A8I3NRG2, None.A0A8P0TPI9, PON1.A0A8P0S812, TMEM126B.A0A8I3N9R7 
+missing_values <- colSums(is.na(processed))                                         # calculate the number of missing values for each column
+variables_with_missing <- names(missing_values[missing_values > 0])                 # saving the column names with missing values
+
+gg_miss_var(processed[, variables_with_missing])                                    # plotting the missing data for variables with missing values
+
+####### 2.1.3. Imputing missing values
+# kNN imputation
+imputed_processed <- kNN(processed, variable = variables_with_missing, k = 4)
+imputed_processed <- imputed_processed[, colnames(processed)]
+empty_columns_count <- sum(colSums(is.na(imputed_processed) | imputed_processed == "") > 0)
+print(paste("Number of empty columns:", empty_columns_count)) # 0                   # printing the count of empty columns to check if imputation worked
+
+############## 2.2. Performing unpaired t-tests & correcting for multiple testing w BH correction and permutation-based FDR correction
+# sd() uses n-1 like var()
+# t-test FDR = 0.05 and FC = 2; samr FDR = 0.05, FC = 1 and permutations = 250
+
+# # A1BG~A0A8I3MIF9
+# paired_data <- data.frame(
+#   CTRL = c(10.33460849695124, 10.843528534611089, 11.972764442377423, 10.246503098280098, 11.18759951253579),
+#   DCM = c(9.54457811733884, 10.751627739669203, 10.724087461793989, 11.977065220762578, 10.932657681422068)
+# )
+
+####### 2.2.1. Prepraing the data for processing
+columns_to_process <- imputed_processed %>% select(4:4990)
+
+# Defining function to apply to each column & store results in a new table
+results_table <- map2_df(colnames(columns_to_process), columns_to_process, function(identifier, column) {
+  display_name <-  sub("\\..*", "", identifier)                                 # extract gene from the identifier (everything before the first dot)
+  group1 <- column[6:10]
+  group2 <- column[1:5]
+  mean_group1 <- mean(group1, na.rm = TRUE)
+  std_group1 <- sqrt(sum((group1 - mean(group1))^2) / (length(group1)))         # sqrt of variance
+  mean_group2 <- mean(group2, na.rm = TRUE)
+  std_group2 <- sqrt(sum((group2 - mean(group2))^2) / (length(group2)))
+  log2FC <- mean_group1 - mean_group2
+  fold_change <- 2^log2FC
+  
+  # Performing t-tests
+  t_test_result <- t.test(group2, group1, var.equal = TRUE)
+  T_statistics <- t_test_result$statistic
+  pvalue <- t_test_result$p.value
+  p_adjusted <- p.adjust(pvalue, method="fdr", length(columns_to_process))
+  minus_log10_pvalue <- -log10(pvalue)
+  
+  # Creating a tibble with the results
+  tibble(
+    identifier = identifier,
+    display_name = display_name,
+    comparison = "DCM~Control",
+    group1 = "DCM",
+    group2 = "Control",
+    mean_group1 = mean_group1,
+    std_group1 = std_group1,
+    mean_group2 = mean_group2,
+    std_group2 = std_group2,
+    fold_change = fold_change,
+    log2FC = log2FC, 
+    T_statistics = T_statistics,
+    pvalue = pvalue,
+    minus_log10_pvalue = minus_log10_pvalue,
+    test = "Unpaired t-test"
+  )
+})
+
+####### 2.2.2. Saving significant proteins
+significant_upregulated <- results_table[results_table$log2FC > 0.83 & results_table$minus_log10_pvalue > 0.83, "display_name", drop = FALSE]
+significant_downregulated <- results_table[results_table$log2FC < -0.83 & results_table$minus_log10_pvalue > 0.83, "display_name", drop = FALSE]
+
+# Create a data frame for the table
+sq <- seq(max(length(significant_downregulated$display_name), length(significant_upregulated$display_name)))
+table_data <- data.frame("DCM~Control down" = significant_downregulated$display_name[sq], "DCM~Control up" = significant_upregulated$display_name[sq])
+
+############## 2.3. Visualizing significant proteins
+#### 2.3.1. Volcano Plots
+ggplot(results_table, aes(x = log2FC, y = minus_log10_pvalue)) +
+  geom_point(aes(color = ifelse(log2FC > 0.83 & minus_log10_pvalue > 0.83, "tomato1", 
+                                ifelse(log2FC < -0.83 & minus_log10_pvalue > 0.83, "cornflowerblue", "grey"))),
+             size = 2) +
+  geom_text(data = subset(results_table, abs(log2FC) > 0.83 & minus_log10_pvalue > 0.83),
+            aes(label = display_name, color = ifelse(log2FC > 0.83 & minus_log10_pvalue > 0.83, "tomato1", 
+                                                      ifelse(log2FC < -0.83 & minus_log10_pvalue > 0.83, "cornflowerblue", "grey"))),
+            hjust = 0, vjust = 0, size = 3) +  # Adjust size as needed
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+  scale_color_identity() +
+  labs(title = "Volcano Plot",
+       x = "Log2 Fold Change",
+       y = "-log10(p-value)") +
+  theme_minimal()
+
+#### 2.3.2. Hierarchical Clustering of significant proteins
+
+####
+regulation_table <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/regulation table.tsv", sep = "\t", header = TRUE, row.names = 1)
+filter(regulation_table, padj1 < 0.01)$display_name
+significant_upregulated <- filter(regulation_table, padj1 < 0.01 & log2FC > 0) 
+significant_upregulated <- significant_upregulated$display_name[significant_upregulated$display_name != ""] # 40
+
+significant_downregulated <- filter(regulation_table, padj1 < 0.01 & log2FC < 0) 
+significant_downregulated <- significant_downregulated$display_name[significant_downregulated$display_name != ""] # 18
+
+############################# 3. Functional Enrichment Analysis
+############## 3.1. 
+GO_0.01_UP <- enrichGO(
+  gene          = significant_upregulated,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # all of them at once: Biological Process (BP), MF (Molecular Function), CC (Cellular Component)
+  pAdjustMethod = "fdr",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_0.01_UP@result[order(GO_0.01_UP@result$p.adjust), ][["Description"]], 10)
+goplot(GO_0.01_UP)
+
+
+GO_0.01_DOWN <- enrichGO(
+  gene          = significant_downregulated,
+  OrgDb         = org.Hs.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # all of them at once: Biological Process (BP), MF (Molecular Function), CC (Cellular Component)
+  pAdjustMethod = "fdr",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+
+head(GO_0.01_DOWN@result[order(GO_0.01_DOWN@result$p.adjust), ][["Description"]], 10)
+
+############## 3.2.KEGG
+## 0.01 FDR
+sigprots_0.01_uniprot <- mixed_fdr0.01_permutation %>%
+  separate(DCM.Control.up, into = c("UP.Gene.Symbol", "UP.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE) %>%
+  separate(DCM.Control.down, into = c("DOWN.Gene.Symbol", "DOWN.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE, extra = "drop")
+
+sigprots_0.01_uniprot_UP <- as.character(na.omit(sigprots_0.01_uniprot$UP.Uniprot.ID))
+length(sigprots_0.01_uniprot_UP) # 41
+sigprots_0.01_uniprot_DOWN <- as.character(na.omit(sigprots_0.01_uniprot$DOWN.Uniprot.ID))
+length(sigprots_0.01_uniprot_DOWN) # 20
+
+# 9615 for Canis lupus familiaris, 9606 for Human on https://biodbnet-abcc.ncifcrf.gov/db/db2dbRes.php
+DOWN_bioDBnet_db2db <- read.table("~/Desktop/KU/MasterThesis/ThesisData/001_DOWN_bioDBnet_db2db.txt", sep = "\t", header = TRUE)
+UP_bioDBnet_db2db <- read.table("~/Desktop/KU/MasterThesis/ThesisData/001_UP_bioDBnet_db2db.txt", sep = "\t", header = TRUE)
+
+DOWN_GENEID <- DOWN_bioDBnet_db2db$Gene.ID[DOWN_bioDBnet_db2db$Gene.ID != "-"] 
+UP_GENEID <- UP_bioDBnet_db2db$Gene.ID
+
+search_kegg_organism('cfa', by='kegg_code') 
+kk <- enrichKEGG(gene         = UP_GENEID,
+                 organism     = 'hsa', #hsa is Human, cfa is Canis lupus familiaris
+                 pvalueCutoff = 0.05)
+
+## gene set enrichment analysis INSTEAD!!! https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-kegg.html
+
+####### 3.1.1 Permutation-based results
+# FDR = 0.01
+minprob_fdr_0.01_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/enrichment/permutation/BP/protein_enrichment_Biological_processes.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.01_CC <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/enrichment/permutation/CC/protein_enrichment_Cellular_components.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.01_MF <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/enrichment/permutation/MF/protein_enrichment_Molecular_functions.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.01_Pathways <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.01/enrichment/permutation/Pathways/protein_enrichment_pathways_Reactome.tsv", sep = "\t", header = TRUE)
+
+mixed_fdr_0.01_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/enrichment/permutation/BP/protein_enrichment_Biological_processes.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.01_CC <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/enrichment/permutation/CC/protein_enrichment_Cellular_components.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.01_MF <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/enrichment/permutation/MF/protein_enrichment_Molecular_functions.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.01_Pathways <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.01/enrichment/permutation/Pathways/protein_enrichment_pathways_Reactome.tsv", sep = "\t", header = TRUE)
+
+# FDR = 0.05
+minprob_fdr_0.05_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/enrichment/permutation/BP/protein_enrichment_Biological_processes.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.05_CC <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/enrichment/permutation/CC/protein_enrichment_Cellular_components.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.05_MF <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/enrichment/permutation/MF/protein_enrichment_Molecular_functions.tsv", sep = "\t", header = TRUE)
+minprob_fdr_0.05_Pathways <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/minprob/fdr_0.05/enrichment/permutation/Pathways/protein_enrichment_pathways_Reactome.tsv", sep = "\t", header = TRUE)
+
+mixed_fdr_0.05_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/enrichment/permutation/BP/protein_enrichment_Biological_processes.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.05_CC <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/enrichment/permutation/CC/protein_enrichment_Cellular_components.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.05_MF <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/enrichment/permutation/MF/protein_enrichment_Molecular_functions.tsv", sep = "\t", header = TRUE)
+mixed_fdr_0.05_Pathways <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/statistics/mixed/fdr_0.05/enrichment/permutation/Pathways/protein_enrichment_pathways_Reactome.tsv", sep = "\t", header = TRUE)
+
+############## 3.2. Running GO functional enrichment analysis on TOP ranked (most abundant) proteins
+####### 3.1.1 Determine the top and bottom proteins for both Control and DCM
+# save the top and bottom 10-s to add to plot
+top_proteins_CTRL <- head(ranked_data_CTRL, 10)$gene.name
+bottom_proteins_CTRL <- tail(ranked_data_CTRL, 10)$gene.name
+top_proteins_DCM <- head(ranked_data_DCM, 10)$gene.name
+bottom_proteins_DCM <- tail(ranked_data_DCM, 10)$gene.name
+
+####### 3.1.2 Saving various sets to run GO functional enrichment on them
+top100_CTRL <- head(ranked_data_CTRL, 100)$gene.name
+bottom100_CTRL <- tail(ranked_data_CTRL, 100)$gene.name
+top100_DCM <- head(ranked_data_DCM, 100)$gene.name
+bottom100_DCM <- tail(ranked_data_DCM, 100)$gene.name
+
+top200_CTRL <- head(ranked_data_CTRL, 200)$gene.name
+bottom200_CTRL <- tail(ranked_data_CTRL, 200)$gene.name
+top200_DCM <- head(ranked_data_DCM, 200)$gene.name
+bottom200_DCM <- tail(ranked_data_DCM, 200)$gene.name
+
+# Get the next 500 genes after the top 100 or 200
+top100_next500_CTRL <- ranked_data_CTRL$gene.name[-c(1:100)][1:500]
+top100_next500_DCM <- ranked_data_DCM$gene.name[-c(1:100)][1:500]
+top200_next500_CTRL <- ranked_data_CTRL$gene.name[-c(1:200)][1:500]
+top200_next500_DCM <- ranked_data_DCM$gene.name[-c(1:200)][1:500]
+
+####### 3.1.3 Performing GO enrichment analysis
+GO_top100_DCM <- enrichGO(
+  gene          = top100_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pAdjustMethod = "fdr",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top100_CTRL <- enrichGO(
+  gene          = top100_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top100_DCM@result[order(GO_top100_DCM@result$p.adjust), ][["Description"]], 10)
+head(GO_top100_CTRL@result[order(GO_top100_CTRL@result$pvalue), ][["Description"]], 10)
+
+GO_top200_DCM <- enrichGO(
+  gene          = top200_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top200_CTRL <- enrichGO(
+  gene          = top200_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top200_DCM@result[order(GO_top200_DCM@result$pvalue), ][["Description"]], 10)
+head(GO_top200_CTRL@result[order(GO_top200_CTRL@result$pvalue), ][["Description"]], 10)
+
+GO_top100_next500_CTRL <- enrichGO(
+  gene          = top100_next500_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top100_next500_DCM <- enrichGO(
+  gene          = top100_next500_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top100_next500_CTRL@result[order(GO_top100_next500_CTRL@result$pvalue), ][["Description"]], 10)
+head(GO_top100_next500_DCM@result[order(GO_top100_next500_DCM@result$pvalue), ][["Description"]], 10)
+
+GO_top200_next500_CTRL <- enrichGO(
+  gene          = top200_next500_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top200_next500_DCM <- enrichGO(
+  gene          = top200_next500_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top200_next500_CTRL@result[order(GO_top200_next500_CTRL@result$pvalue), ][["Description"]], 10)
+head(GO_top200_next500_DCM@result[order(GO_top200_next500_DCM@result$pvalue), ][["Description"]], 10)
+
+### next round: top500 and the following 200 instead
+top500_CTRL <- head(ranked_data_CTRL, 500)$gene.name
+top500_DCM <- head(ranked_data_DCM, 500)$gene.name
+top500_next200_CTRL <- ranked_data_CTRL$gene.name[-c(1:500)][1:200]
+top500_next200_DCM <- ranked_data_DCM$gene.name[-c(1:500)][1:200]
+
+GO_top500_DCM <- enrichGO(
+  gene          = top500_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top500_CTRL <- enrichGO(
+  gene          = top500_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top500_DCM@result[order(GO_top500_DCM@result$pvalue), ][["Description"]], 20)
+head(GO_top500_CTRL@result[order(GO_top500_CTRL@result$pvalue), ][["Description"]], 20)
+
+GO_top500_next200_CTRL <- enrichGO(
+  gene          = top500_next200_CTRL,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+GO_top500_next200_DCM <- enrichGO(
+  gene          = top500_next200_DCM,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "SYMBOL",
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), or CC (Cellular Component)
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+head(GO_top500_next200_CTRL@result[order(GO_top500_next200_CTRL@result$pvalue), ][["Description"]], 20)
+head(GO_top500_next200_DCM@result[order(GO_top500_next200_DCM@result$pvalue), ][["Description"]], 20)
+
+## Hierarchical clustering analysis
+GO_terms_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/associations/enrichment_terms_mapping_Biological_process.tsv", sep = "\t", header = TRUE, check.names = FALSE)
+
+############################# FUNCTIONAL ENRICHMENT v 2.0.0
+# making it more similar to the CKG's custom function for functional enrichment analysis
+
+backg_prots <- unique(original$leading.razor.protein)
+
+## 0.01 FDR
+sigprots_0.01_uniprot <- mixed_fdr0.01_permutation %>%
+  separate(DCM.Control.up, into = c("UP.Gene.Symbol", "UP.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE) %>%
+  separate(DCM.Control.down, into = c("DOWN.Gene.Symbol", "DOWN.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE, extra = "drop")
+
+sigprots_0.01_uniprot_UP <- as.character(na.omit(sigprots_0.01_uniprot$UP.Uniprot.ID))
+length(sigprots_0.01_uniprot_UP) # 41
+sigprots_0.01_uniprot_DOWN <- as.character(na.omit(sigprots_0.01_uniprot$DOWN.Uniprot.ID))
+length(sigprots_0.01_uniprot_DOWN) # 20
+
+## 0.05 FDR
+sigprots_0.05_uniprot <- mixed_fdr0.05_permutation %>%
+  separate(DCM.Control.up, into = c("UP.Gene.Symbol", "UP.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE) %>%
+  separate(DCM.Control.down, into = c("DOWN.Gene.Symbol", "DOWN.Uniprot.ID"), sep = "~", remove = TRUE, convert = TRUE, extra = "drop")
+
+sigprots_0.05_uniprot_UP <- as.character(na.omit(sigprots_0.05_uniprot$UP.Uniprot.ID))
+length(sigprots_0.05_uniprot_UP) # 164
+sigprots_0.05_uniprot_DOWN <- as.character(na.omit(sigprots_0.05_uniprot$DOWN.Uniprot.ID))
+length(sigprots_0.05_uniprot_DOWN) # 169
+
+foreg_prots <- sigprots_0.01_uniprot_UP # choose from sigprots_0.01_uniprot_UP, sigprots_0.01_uniprot_DOWN & sigprots_0.05_uniprot_UP, sigprots_0.05_uniprot_DOWN
+
+GO_BP_0.01 <- enrichGO(
+  gene          = foreg_prots,
+  universe = backg_prots,
+  OrgDb         = org.Cf.eg.db, # DB of genome wide annotation for Canine, primarily based on mapping using Entrez Gene identifiers
+  keyType       = "UNIPROT", # Uniprot IDs instead of 
+  ont           = "BP",  # Biological Process (BP), MF (Molecular Function), CC (Cellular Component) or ALL
+  pAdjustMethod = "fdr"
+)
+
+GO_BP_0.01_RESULTS <- GO_BP_0.01@result # this only finds 1 protein in the foreground and 117 in the background because the OrgDb is Entrez Gene ID-specific
+
+########### FUNCTIONAL ENRICHMENT v 2.1.0
+# # Read in all the GO terms mapping files
+# GO_terms_MAP_BP <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/associations/enrichment_terms_mapping_Biological_process.tsv", sep = "\t", header = TRUE, check.names = FALSE)
+# GO_terms_MAP_MF <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/associations/enrichment_terms_mapping_Molecular_function.tsv", sep = "\t", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE, quote = '"')
+# GO_terms_MAP_CC <- read.table("~/Desktop/KU/MasterThesis/ThesisData/PD output/bioinformatics/no_nested/no_S4_S12/associations/enrichment_terms_mapping_Cellular_component.tsv", sep = "\t", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE, quote = '"')
+# 
+# GO_terms_MAP_BP <- GO_terms_MAP_BP[, -1]
+# GO_terms_MAP_MF <- GO_terms_MAP_MF[, -1]
+# GO_terms_MAP_CC <- GO_terms_MAP_CC[, -1]
+# 
+# colnames(GO_terms_MAP_BP)[1] <- "leading.razor.protein"
+# colnames(GO_terms_MAP_MF)[1] <- "leading.razor.protein"
+# colnames(GO_terms_MAP_CC)[1] <- "leading.razor.protein"
+# 
+# merged_data <- merge(GO_terms_MAP_BP, data.frame(leading.razor.protein = foreg_prots), by = "leading.razor.protein", all.x = TRUE)
+# 
+# go_result <- enrichGO(
+#   gene  = foreg_prots,
+#   universe = backg_prots,
+#   OrgDb = NULL,                 # No need for OrgDb since you are using custom mappings
+#   keyType = "CUSTOM",           # Specify the key type as "CUSTOM"
+#   annotation = merged_data,
+#   pvalueCutoff = 0.05,
+#   readable = TRUE
+# )
+
+############################# Ingenuity Pathway Analysis
+## processing ORIGINAL data for IPA
+new_names <- c("identifier1", "leading razor protein1", "gene name1", "sample1", "LFQ intensity1", "subject1", "group1", "identifier2", "leading razor protein2", "gene name2", "sample2", "LFQ intensity2", "subject2","group2")
+
+original_rearranged <- read.table("~/Downloads/original_rearranged.txt", sep = "\t", header = TRUE, check.names = FALSE)
+colnames(original_rearranged) <- new_names
+original_rearranged <- original_rearranged %>%
+  mutate(sample_identifier1 = paste0(subject1, "", sample1)) %>%
+  mutate(sample_identifier2 = paste0(subject2, "", sample2)) %>%
+  select(-subject1, -sample1, -sample2, -subject2)  %>%
+  select("identifier1", "sample_identifier1", "leading razor protein1", "gene name1", "LFQ intensity1", "group1", "identifier2", "sample_identifier2", "leading razor protein2", "gene name2", "LFQ intensity2", "group2")
+
+# Specify the file path where you want to save the TSV file
+file_path <- "~/Downloads/original_rearranged.tsv"
+
+# Write the data frame to a TSV file
+write.table(original_rearranged, file = file_path, sep = "\t", quote = FALSE, row.names = FALSE)
+
+
+
+## reorganising PROCESSED data
+processed_minprob_T <- t(processed_minprob)
+processed_mixed_T <- t(processed_mixed)
+
+# moving the indexcolumn into the first column
+row_names <- rownames(processed_minprob_T)
+processed_minprob_T <- data.frame(IndexColumn = row_names, processed_minprob_T)
+rownames(processed_minprob_T) <- NULL
+
+row_names <- rownames(processed_mixed_T)
+processed_mixed_T <- data.frame(IndexColumn = row_names, processed_mixed_T)
+rownames(processed_mixed_T) <- NULL
+
+# deleting the first 3 rows
+processed_minprob_T <- processed_minprob_T[4:nrow(processed_minprob_T), ]
+processed_mixed_T <- processed_mixed_T[4:nrow(processed_mixed_T), ]
+
+### MIXED
+# correct the 18 problematic rows in processed_mixed_T: [1175, 1176, 1806, 1807, 1808, 1809, 1815, 2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647, 2648, 2649, 2650]
+numbers_to_change <- c(1175, 1176, 1806, 1807, 1808, 1809, 1815, 2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647, 2648, 2649, 2650)
+
+# Loop through the list of numbers
+for (number in numbers_to_change) {
+  # Find the corresponding row in the first column
+  # Replace the first dot with a hyphen in the first column
+  processed_mixed_T[number, 1] <- sub("\\.", "-", processed_mixed_T[number, 1])
+  }
+
+# mutate the IndexColumn
+processed_mixed_T <- separate(processed_mixed_T, IndexColumn, into = c("GeneSymbol", "UniprotID"), sep = "\\.", fill = "right")
+
+### MINPROB
+# correct the same 18 problematic rows in processed_minprob_T: [1175, 1176, 1806, 1807, 1808, 1809, 1815, 2640, 2641, 2642, 2643, 2644, 2645, 2646, 2647, 2648, 2649, 2650]
+for (number in numbers_to_change) {
+  # Find the corresponding row in the first column
+  # Replace the first dot with a hyphen in the first column
+  processed_minprob_T[number, 1] <- sub("\\.", "-", processed_minprob_T[number, 1])
+}
+processed_minprob_T <- separate(processed_minprob_T, IndexColumn, into = c("GeneSymbol", "UniprotID"), sep = "\\.", fill = "right")
+
+colnames(processed_minprob_T) <- c("GeneSymbol", "UniprotID", "C1S01", "C2S02", "C3S03", "C5S05", "C6S06", "D1S07", "D2S08", "D3S09", "D4S10", "D5S11")
+colnames(processed_mixed_T) <- c("GeneSymbol", "UniprotID", "C1S01", "C2S02", "C3S03", "C5S05", "C6S06", "D1S07", "D2S08", "D3S09", "D4S10", "D5S11")
+
+file_path <- "~/Desktop/KU/MasterThesis/ThesisData/forIPA/processed_minprob_T.tsv"
+write.table(processed_minprob_T, file = file_path, sep = "\t", quote = FALSE, row.names = FALSE)
+file_path <- "~/Desktop/KU/MasterThesis/ThesisData/forIPA/processed_mixed_T.tsv"
+write.table(processed_mixed_T, file = file_path, sep = "\t", quote = FALSE, row.names = FALSE)
+
+
+
+##################### PCA
+# Scale your data to have mean=0 and std.dev=1
+scaled_pca_data <- scaled_kmeans_data %>%
+  select(-Proteins, -Clusters) %>%  # Exclude the 'Proteins' & 'Clusters' column
+  as.matrix()
+
+# Apply PCA to reduce the dimensionality
+pca_result <- princomp(scaled_pca_data)
+
+# Create a data frame with PCA results and cluster labels
+pca_data <- data.frame(Proteins = factor(processed_mixed_kmeans$Proteins),
+                       PC1 = pca_result$scores[, 1],
+                       PC2 = pca_result$scores[, 2],
+                       Clusters = factor(scaled_kmeans_data$Clusters))
+
+# Create a scatterplot of the first two principal components
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Clusters)) +
+  geom_point() +
+  labs(title = "K-Means Clustering (PCA)")
+
+
+scaled_heatmap_data <- as.matrix(scaled_kmeans_data[, -1])
+
+# Replace NAs with 0 and convert the matrix to numeric
+scaled_heatmap_data <- as.matrix(scaled_heatmap_data)
+scaled_heatmap_data[is.na(scaled_heatmap_data)] <- 0
+scaled_heatmap_data_numeric <- as.numeric(scaled_heatmap_data)
+
+
+# Cluster the samples based on LFQ intensities and visualize in a heatmap
+pheatmap(scaled_heatmap_data_numeric, cluster_rows = TRUE, cluster_cols = FALSE)
+
+
+##################### Saving data for STRING
+ordered_table <- regulation_table[order(regulation_table$padj1), ]
+
+# Save the two columns to a new data frame
+selected_columns <- ordered_table[, c("display_name", "padj1")]
+
+# Save the data frame to a CSV file
+write.csv(selected_columns, "Data_for_STRING.csv", row.names = FALSE)
